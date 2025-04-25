@@ -20,7 +20,7 @@ function compile_arcMagma_db(n_X, n_T)
 
     # Generate column for random fO2 values (delta FMQ)
     min_deltaFMQ = 0.0
-    max_delta_FMQ = 3.0
+    max_delta_FMQ = 2.5
     subsampled_df[!, "del_FMQ"] .= min_deltaFMQ .+ (max_delta_FMQ - min_deltaFMQ) .* rand(n_X)
 
     # Generate column with either 0, 1 or 2 dQFM 
@@ -182,4 +182,4 @@ n_T = 25 # Number of temperature points to run
 df = compile_arcMagma_db(n_X, n_T)
 Out_all = runMAGEMin(df)
 df_out = postprocess_MAGEMin(Out_all, n_X, n_T)
-CSV.write("./data/S_model_LLDs_delFMQ0-2discrete.csv", df_out)
+CSV.write("./data/S_model_LLDs_delFMQ0-2.5.csv", df_out)
