@@ -2,7 +2,7 @@
 
 using MAGEMin_C, DataFramesMeta, CSV, CairoMakie, JLD2, DelimitedFiles, StatsBase
 
-function compile_arcMagma_db(n_X, n_T)
+function compile_arcMagma_db(n_X)
 
     # n_X  Number of starting compositions you want in the subsampled dataframe
     # n_T  Number of temperature points to run for each composition
@@ -19,78 +19,133 @@ function compile_arcMagma_db(n_X, n_T)
     subsampled_df = df_orig[sample(1:nrow(df_orig), n_X, replace=true), :] # Subsample with replacement
 
     # Generate column for random fO2 values (delta FMQ)
-    min_deltaFMQ = 0.0
-    max_delta_FMQ = 2.5
+    min_deltaFMQ = 0.71
+    max_delta_FMQ = 2.69
     subsampled_df[!, "del_FMQ"] .= min_deltaFMQ .+ (max_delta_FMQ - min_deltaFMQ) .* rand(n_X)
 
     # Generate column with either 0, 1 or 2 dQFM 
     # subsampled_df[!, "del_FMQ"] .= Float64.(rand(0:2, nrow(subsampled_df)))
-    print(subsampled_df)
+
+    # Generate column for initial H2O contents
+    min_H2O = 2
+    max_H2O = 4
+    subsampled_df[!, "H2O(WT%)"] .= min_H2O .+ (max_H2O - min_H2O)  * rand(n_X)
 
     # Generate column for pressure to run isobaric cooling (kbar)
-    min_P = 4
-    max_P = 9
-    subsampled_df[!, "P"] .= min_P .+ (max_P - min_P) .* rand(n_X)
-
-    # Generate column for H2O contents
-    min_H2O = 0
-    max_H2O = 4
-    subsampled_df[!, "H2O(WT%)"] .= min_H2O .+ (max_H2O - min_H2O) .* rand(n_X)
-    
-
-    # Duplicate dataframe so each composition is duplicated n_T times for the number of temperature points to run for the minimisation
-    
-    subsampled_df = DataFrame(vcat([[row for _ in 1:n_T] for row in eachrow(subsampled_df)]...))
-
-    # Generate temperatures for minimisation
-    min_T = 700
-    max_T = 1400
-    Ts = collect(range(max_T, stop=min_T, length=n_T))
-    Ts = repeat(Ts, n_X) # Repeat this for each of the compositions
-
-    subsampled_df[!, "T"] .= Ts
+    # min_P = 2
+    # max_P = 10
+    # subsampled_df[!, "P"] .= min_P .+ (max_P - min_P) * rand(n_X)
 
     return subsampled_df
 end
 
-function runMAGEMin(df)
+function fixed_starting_comp(n_X)
+    """
+    Creates a dataframe with a starting composition n_X times based on a composition in a csv file
+    """
+    # Load compositions to data frame
+    target_dir       = "./data"
+    data_path        = "./data/blatter_starting_comp.csv"
+    data, header     = readdlm(data_path, ',', header=true)
+    df_orig          = DataFrame(data, vec(header))
+    df_orig[!, "CR2O3(WT%)"] .= 0.01
+    df_orig[!, "O(WT%)"] .= 1.49 # Generate oxygen column to saturate O and activate the buffer
+
+    # Duplicate the row vertically for n_X times
+    df_dup = vcat([df_orig for _ in 1:n_X]...)
+
+    # Generate column for random fO2 values (delta FMQ)
+    min_deltaFMQ = 0.0
+    max_delta_FMQ = 2.5
+    df_dup[!, "del_FMQ"] .= min_deltaFMQ .+ (max_delta_FMQ - min_deltaFMQ) .* rand(n_X)
+
+    # Generate column for initial H2O contents
+    min_H2O = 4
+    max_H2O = 4
+    df_dup[!, "H2O(WT%)"] .= min_H2O .+ (max_H2O - min_H2O)  * rand(n_X)
+
+    # Generate column for pressure to run isobaric cooling (kbar)
+    min_P = 5
+    max_P = 8
+    df_dup[!, "P"] .= min_P .+ (max_P - min_P) * rand(n_X)
+
+
+    return df_dup
+end
+
+
+function runMAGEMin(df, nsteps)
     # Prepare dataframe for MAGEMin 
-    columns_to_select = [:"SIO2(WT%)", :"AL2O3(WT%)", :"CAO(WT%)", :"MGO(WT%)", :"FEOT(WT%)", :"K2O(WT%)", :"NA2O(WT%)", :"TIO2(WT%)", "CR2O3(WT%)", :"H2O(WT%)",:"O(WT%)"]
+    columns_to_select = [:"SIO2(WT%)", :"AL2O3(WT%)", :"CAO(WT%)", :"MGO(WT%)", :"FEOT(WT%)", :"K2O(WT%)", :"NA2O(WT%)", :"TIO2(WT%)", :"O(WT%)", "CR2O3(WT%)", :"H2O(WT%)"]
     X_all = df[!, columns_to_select]
-    X_all = rename!(X_all, [:"SiO2", :"Al2O3", :"CaO", :"MgO", :"FeO", :"K2O", :"Na2O", :"TiO2", :"Cr2O3", :"H2O", :"O"])
+    X_all = rename!(X_all, [:"SiO2", :"Al2O3", :"CaO", :"MgO", :"FeO", :"K2O", :"Na2O", :"TiO2", :"O", :"Cr2O3", :"H2O"])
     # X_all = [collect(X_all.SiO2), collect(X_all.Al2O3), collect(X_all.CaO), collect(X_all.MgO), collect(X_all.FeO), collect(X_all.K2O), collect(X_all.Na2O), collect(X_all.TiO2), collect(X_all.Cr2O3), collect(X_all.H2O), collect(X_all.O)] # Convert to nested vector for MAGEMin
     
     # Convert DataFrame rows to a nested vector (each row as a separate vector)
     X_all = [collect(row) for row in eachrow(X_all)]
-    
-    T_all = df[!, "T"]
-    P_all = df[!, "P"]
-    B_all = df[!, "del_FMQ"]
 
-    println(length(P_all))
+    # Generate temperatures for minimisation
+    min_T = 700.00
+    max_T = 1200.00
+    T_step = 25.0
+
+    # Generate pressures for minimisation
+    # min_P = 1.0
+    P_all = df[!, "P"]
+    # P_step = 0.5
+
+    del_FMQ = df[!, "del_FMQ"]
     
     # MAGEMin
     data           = Initialize_MAGEMin("ig", verbose = false, buffer = "qfm", solver=2)
-    oxides_MAGEMin = ["SiO2", "Al2O3", "CaO", "MgO", "FeO", "K2O", "Na2O", "TiO2", "Cr2O3", "H2O", "O"]
+    oxides_MAGEMin = ["SiO2", "Al2O3", "CaO", "MgO", "FeO", "K2O", "Na2O", "TiO2", "O", "Cr2O3", "H2O"]
     sys_in         = "wt"
 
+    # allocate storage space
+    # Out_XY  = Vector{MAGEMin_C.gmin_struct{Float64, Int64}}(undef,nsteps*length(X_all))
 
-    
-    
+    # Start with an empty vector
+    Out_XY = Vector{MAGEMin_C.gmin_struct{Float64, Int64}}()
+    n = 0
+    for composition in X_all
+        nT = 0
+        n = n + 1
+        print(n)
+        melt_F = 1.5
+        B = del_FMQ[n]
+        T = max_T
+        P = P_all[n] 
+        while melt_F > 0.1 && T >= min_T # F = 0.1 to avoid very weird compositions ascending
+            nT += 1
+            composition[end - 2] = 1.49 # Keep oxygen saturated
+            out = single_point_minimization(P, T, data, X = composition, B = B, Xoxides = oxides_MAGEMin, sys_in = sys_in)
+            push!(Out_XY, deepcopy(out))
+            # Out_XY[nP+nT]   = deepcopy(out)
+
+            # retrieve melt composition to use as starting composition for next iteration
+            melt_F          = out.frac_M_wt
+            composition           .= out.bulk_M_wt*100
+
+            T = T - T_step
+        end
+    end
     # GC.gc()
     # GC.enable(false)
-    Out_all = multi_point_minimization(P_all, T_all, data, X = X_all, B = B_all, Xoxides = oxides_MAGEMin, sys_in = sys_in, progressbar = true)
-    return Out_all
+    return Out_XY
 end
 
-function postprocess_MAGEMin(Out_PT, n_X, n_T)
+function postprocess_MAGEMin(Out_PT)
 
-    n = n_X*n_T
+    n = length(Out_all)
 
     T_mage = Vector{Float64}(undef, n)
     P_mage = Vector{Float64}(undef, n)
     dQFM_mage = Vector{Float64}(undef, n)
     melt_fraction_mage = Vector{Float64}(undef, n)
+    fluid_fraction_mage = Vector{Float64}(undef, n)
+    solid_fraction_mage = Vector{Float64}(undef, n) 
+    density_liquid = Vector{Float64}(undef, n)
+    density_solid = Vector{Float64}(undef, n)
 
     SiO2_liq_mage  = Vector{Float64}(undef, n)
     Al2O3_liq_mage  = Vector{Float64}(undef, n)
@@ -118,6 +173,10 @@ function postprocess_MAGEMin(Out_PT, n_X, n_T)
         T_mage[iOut]  = Out_PT[iOut].T_C
         P_mage[iOut]  = Out_PT[iOut].P_kbar
         dQFM_mage[iOut] = Out_PT[iOut].dQFM
+
+        # Densities
+        density_liquid[iOut] = Out_PT[iOut].rho_M
+        density_solid[iOut] = Out_PT[iOut].rho_S
 
         # Major oxides liquid
         SiO2_liq_mage[iOut]  = Out_PT[iOut].bulk_M_wt[1]
@@ -147,7 +206,17 @@ function postprocess_MAGEMin(Out_PT, n_X, n_T)
         end
         melt_fraction_mage[iOut] = Out_PT[iOut].ph_frac[liq_id] # Assign melt fraction wt% to df
 
+        fl_id = findfirst(x-> x .== "fl", out_point.ph) # Find index of fluid
+        if isnothing(fl_id)
+            fluid_fraction_mage[iOut] = 0
+            continue
+        end
+        fluid_fraction_mage[iOut] = Out_PT[iOut].ph_frac[fl_id] # Assign fluid fraction wt% to df
+
     end
+
+    # Use mass balance to calculate solid fraction
+    solid_fraction_mage = 1.0 .- melt_fraction_mage .- fluid_fraction_mage
 
     # Store MAGEMin data
     df_out = DataFrame()
@@ -155,6 +224,10 @@ function postprocess_MAGEMin(Out_PT, n_X, n_T)
     df_out[:, "P_kbar"]           = P_mage
     df_out[:, "delta_QFM"]        = dQFM_mage
     df_out[:, "melt_frac_wt"]     = melt_fraction_mage
+    df_out[:, "fluid_frac_wt"]     = fluid_fraction_mage
+    df_out[:, "solid_frac_wt"]     = solid_fraction_mage
+    df_out[:, "density_liquid"]     = density_liquid
+    df_out[:, "density_solid"]     = density_solid
     df_out[:, "SiO2_liq_mage"]    = SiO2_liq_mage
     df_out[:, "Al2O3_liq_mage"]   = Al2O3_liq_mage
     df_out[:, "CaO_liq_mage"]     = CaO_liq_mage
@@ -174,12 +247,40 @@ function postprocess_MAGEMin(Out_PT, n_X, n_T)
     df_out[:, "TiO2_sol_mage"]    = TiO2_sol_mage
     df_out[:, "H2O_sol_mage"]     = H2O_sol_mage
 
+    # Write a column with the simulation numbers to help with plotting
+    df_out.simulation = zeros(Int, nrow(df_out)) # Initialize a column to hold simulation numbers
+    sim = 0
+
+    # Loop over the rows and assign simulation numbers
+    for i in 1:nrow(df_out)
+        if df_out[!, "T_C"][i] == maximum(df_out[!, "T_C"])
+            sim += 1  # Start of new simulation
+        end
+        df_out.simulation[i] = sim
+    end
+
+    # Create column for absolute melt fraction
+    df_out.abs_melt_frac = similar(df_out.melt_frac_wt) # Preallocate the new column
+    grouped = groupby(df_out, :simulation) # Group by simulation ID
+
+    for g in grouped # Loop through each group (simulation)
+        for i in 1:nrow(g)
+            row_idx = parentindices(g)[1][i]  
+            if i == 1 # First model step should keep same melt fraction
+                df_out[row_idx, :abs_melt_frac] = g[i, :melt_frac_wt]
+            else # Otherwise multiply melt fraction by absolute melt fraction for previous step
+                 df_out[row_idx, :abs_melt_frac] = g[i-1, :abs_melt_frac] * g[i, :melt_frac_wt]
+            end
+        end
+    end
+
     return df_out
 end
 
 n_X = 1000 # Number of starting compositions to sample (with replacement)
-n_T = 25 # Number of temperature points to run
-df = compile_arcMagma_db(n_X, n_T)
-Out_all = runMAGEMin(df)
-df_out = postprocess_MAGEMin(Out_all, n_X, n_T)
-CSV.write("./data/S_model_LLDs_delFMQ0-2.5.csv", df_out)
+nsteps = 20 # Number of temperature points to run
+# df = compile_arcMagma_db(n_X)
+df = fixed_starting_comp(n_X)
+Out_all = runMAGEMin(df, nsteps)
+df_out = postprocess_MAGEMin(Out_all)
+CSV.write("/Users/cnathwani/Desktop/Python_Projects/MAGEMin_Petrology_Modelling/outputs/S_model_blatter.csv", df_out)
