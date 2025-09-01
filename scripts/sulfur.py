@@ -160,3 +160,34 @@ def calc_D(T, del_FMQ, FeOmelt, element, sulfur_phase):
     logd = d + a * (10000/T) + b*del_FMQ + c*np.log10(FeOmelt)
     D = 10**logd
     return D
+
+def calc_melt_comp(Co, D, F, type):
+    '''
+        Calculate the melt composition based on initial concentration and melting model.
+
+    Parameters
+    ----------
+    Co : float
+        Initial concentration of the element in the source material.
+    D : float
+        Bulk distribution coefficient.
+    F : float
+        Melt fraction (in percent, e.g., 10 for 10%).
+    type : str
+        Type of melting model to use. Must be one of:
+        - 'EQ' for equilibrium crystallisation.
+        - 'FC' for fractional crystallization.
+
+    Returns
+    -------
+    Cl : float
+        Concentration of the element in the melt.
+
+    '''
+    if type == 'EQ':
+        Cl = (Co/(D+F/100*(1-D)))
+    elif type == 'FC':
+        Cl = Co*(F/100)**(D-1)
+    else:
+        raise ValueError("Invalid type. Must be 'EQ' or 'FC'.")
+    return Cl
